@@ -1,0 +1,18 @@
+[package]
+name = "explanation"
+version = "0.1.0"
+authors = ["Frank McSherry <fmcsherry@me.com>"]
+
+[dependencies]
+timely_sort="*"
+timely="*"
+rand="*"
+time="*"
+fnv="*"
+
+[dependencies.differential-dataflow]
+git="https://github.com/frankmcsherry/differential-dataflow.git"
+#path="../../differential-dataflow"
+
+[dependencies.graph_map]
+git="https://github.com/frankmcsherry/graph-map.git"
