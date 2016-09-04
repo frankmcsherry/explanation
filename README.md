@@ -6,7 +6,7 @@ Infrastructure for explaining the outputs of differential dataflow computations
 
 This project demonstrates how one can use differential dataflow to explain the outputs of differential dataflow computations, as described in the paper [Explaining outputs in modern data analytics](http://www.vldb.org/pvldb/vol9/p1137-chothia.pdf). There is also an earlier [blog post](https://github.com/frankmcsherry/blog/blob/master/posts/2016-03-27.md) discussing the material, and trying to explain how it works.
 
-In our context, programs run on input collections and produce output collections. An "explanation" for a subset of the output is a subset of the input so that if you ran the computation, it would produce at least the output subset you asked for. 
+In our context, programs run on input collections and produce output collections. An "explanation" for a subset of the output is a subset of the input so that if you ran the computation on this subset, it would produce at least the output subset you asked for. 
 
 Concise explanations of this form can be super helpful, both for debugging your program and for understanding / communicating why parts of the output are the way they are. 
 
@@ -109,7 +109,7 @@ Let's make life a bit more difficult, removing that last edge from the reported 
 
 We see that the set of required edges changes; the edge `(123456, 133128)` no longer exists and is removed. Several new edges are added which reveal another path from `0` to `123456`.
 
-One may (and should) wonder why the other explanatory edges along the shorter path are not removed. The reason is that explanations are currently for the full *history* of the queried node. It is reasonable to want only the current explanation, and it seems likely that the same type of techniques could provide this behavior as well. At the same time, this introduces some ambiguities that we don't yet know how to resolve (e.g. two positives and a negative; which positive is needed and which is cancelled?).
+One may (and should) wonder why the other explanatory edges along the shorter path are not removed. The reason is that explanations are currently for the full *history* of the queried node. It is reasonable to want only the current explanation, and it seems likely that the same type of techniques could provide this behavior as well. At the same time, this introduces some ambiguities that we don't yet know how to resolve generally.
 
 The amount of time taken, 923ms, doesn't seem so great. It turns out this is just timely dataflow shaking out some dust when we first perform updates to the graph (and should probably be fixed). Now that it is sorted out, we can repeat the type of update and see more brisk responses.
 
