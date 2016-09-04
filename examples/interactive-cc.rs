@@ -69,7 +69,7 @@ fn main() {
                     let mut var_label = Variable::new(label.clone(), label_must.stream.clone(), &mut explanation_scope);
 
                     // transpose edges and concatenate, symmetrizing the graph.
-                    let mut var_edges = var_graph.map(|(x,y)| (y,x), |(y,x,t,q)| (x,y,t,q))
+                    let mut var_edges = var_graph.map_inverse(|(x,y)| (y,x), |(y,x)| (x,y))
                                                  .concat(&mut var_graph);
 
                     // actual computation loop; can you believe we do computation, too?
@@ -85,18 +85,18 @@ fn main() {
                         let mut var_transmit = 
                             var_edges.enter(inner)
                                      .join_u(&mut var_inner)
-                                     .map(|(x,(y,l))| (y,(l,x)), |(y,(l,x),t,q)| (x,(y,l),t,q));
+                                     .map_inverse(|(x,(y,l))| (y,(l,x)), |(y,(l,x))| (x,(y,l)));
 
                         // bring in initial labels from outside, concat with proposals
                         let mut var_options = 
                             var_label.enter_at(inner, |r| 256 * (((((r.0).0) as f64).ln() * 10.0) as u32))
-                                     .map(|(x,l)| (x,(l,x)), |(x,(l,_),t,q)| (x,l,t,q))
+                                     .map_inverse(|(x,l)| (x,(l,x)), |(x,(l,_))| (x,l))
                                      .concat(&mut var_transmit);
 
                         // group the labels by key, using min! macro
                         let mut var_min = min!(var_options, |(l,_d)| l, explanation_scope);
 
-                        // BEGIN FEEDBACK LOGIC
+                        // BEGIN FEEDBACK CONNECT
                         var_min.stream.inner.connect_loop(handle1);
                         var_min.working.inner.connect_loop(handle2);
                         var_min.depends.add(
@@ -104,12 +104,10 @@ fn main() {
                             .filter(|&(_,_,t,_)| t.inner > 0)
                             .map(|(x,l,t,q)| (x,l,Product::new(t.outer, t.inner - 1),q))
                         );
-                        // END FEEDBACK LOGIC
+                        // END FEEDBACK CONNECT
 
                         leave!(var_min, explanation_scope)
                     });
-
-                    // final_labels.stream.inspect(|x| println!("final_label: {:?}", x));
 
                     // introduce any query elements as initial dependences.
                     final_labels.depends.add(&query.enter(&explanation_scope));
@@ -155,13 +153,6 @@ fn main() {
                 }
             }
         }
-        // if root.index() == 0 {
-        //     label.send(((0u32, 0u32), 1));
-        //     graph.send(((0, 1), 1));
-        //     graph.send(((1, 3), 1));
-        //     graph.send(((0, 2), 1));
-        //     graph.send(((2, 3), 1));
-        // }
         // END DATA LOADING
 
         // close labels, advance graph and query inputs to the next epoch.
@@ -170,42 +161,6 @@ fn main() {
         query.advance_to(1);
         root.step_while(|| probe.lt(&query.time()));
         println!("");
-
-        // if root.index() == 0 {
-        //    query.send(((3, 0, Product::new(RootTimestamp::new(u32::max_value()), u32::max_value()), 0 as u32), 1));
-        // }
-        // graph.advance_to(2);
-        // label.advance_to(2);
-        // query.advance_to(2);
-        // root.step_while(|| probe.lt(&query.time()));
-        // println!("");
-
-        // // if root.index() == 0 {
-        // //     graph.send(((0,3),-1));
-        // // }
-        // // graph.advance_to(3);
-        // // label.advance_to(3);
-        // // query.advance_to(3);
-        // // root.step_while(|| probe.lt(&query.time()));
-        // // println!("");
-
-        // if root.index() == 0 {
-        //     graph.send(((1,3),-1));
-        // }
-        // graph.advance_to(3);
-        // label.advance_to(3);
-        // query.advance_to(3);
-        // root.step_while(|| probe.lt(&query.time()));
-        // println!("");
-
-        // if root.index() == 0 {
-        //     graph.send(((1,3),1));
-        // }
-        // graph.advance_to(4);
-        // label.advance_to(4);
-        // query.advance_to(4);
-        // root.step_while(|| probe.lt(&query.time()));
-        // println!("");
 
         let timer = ::std::time::Instant::now();
         root.step_while(|| probe.lt(&query.time()));

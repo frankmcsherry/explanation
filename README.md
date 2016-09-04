@@ -142,15 +142,94 @@ This is also a relatively simple change in explanation, but a substantially long
 
 ## A second example: stable matching
 
-For a more exotic and technically challenging example, we also have an implementation of [stable matching](https://en.wikipedia.org/wiki/Stable_marriage_problem). Stable matching takes a bi-partite graph as input, where each node on one side of the graph has a rank-ordered preference for neighbors on the other side of the graph. The computation repeatedly has one side propose to the other, each node choosing its most appealing neighbor who has not yet rejected their proposal. The recipients collect their proposals and reject any that are not the best they've received.
+For a more exotic and technically challenging example, we also have an implementation of [stable matching](https://en.wikipedia.org/wiki/Stable_marriage_problem). Stable matching takes a bipartite graph as input, where each node on one side of the graph has a rank-ordered preference for neighbors on the other side of the graph. The computation repeatedly has one side propose to the other, each node choosing its most appealing neighbor who has not yet rejected their proposal. The recipients collect their proposals and reject any that are not the best they've received.
 
-This is an iterative computation, in the same spirit as prioritized label propagation for connected components. We can run this program in differential dataflow, and it will quickly update as the preferences and graph structure change.
+This is an iterative computation, in the same spirit as prioritized label propagation for connected components. We can run this program in differential dataflow, and it will update as the preferences change.
 
-This computation is a bit harder to explain, as its outputs lack the property of "monotonicity"; adding some new inputs may make some outputs "worsen". Don't worry too much about what this means if you don't like. If you are curious, there are more details in our paper.
+Here is a very simple example, in which node `0` fancies node `2`, but the feeling is not reciprocated (nodes `1` and `2` make off together). Node `0` also likes `3` some (though not as much) and node `4` somewhat less. The format for each input is
 
-Another issue is that we (or I) don't have great intuition for what a good explanation of stable matching looks like. We know that for connectivity a path is a great explanation, and are delighted to see that output. Let's run the explanation infrastructure for stable matching and see if we are similarly delighted. 
+	node1_id node1_pref node2_id node2_pref
 
-#### WRITE EXAMPLE TEXT HERE
+which we can just go and run
+
+	Echidnatron% cargo run --example interactive-stable
+	     Running `target/debug/examples/interactive-stable`
+
+	initialization elapsed:	Duration { secs: 0, nanos: 1323 }
+	> prefs + 0 0 2 1
+	round 1 elapsed:	Duration { secs: 0, nanos: 18263025 }
+	> prefs + 0 1 3 0
+	round 2 elapsed:	Duration { secs: 0, nanos: 6258544 }
+	> prefs + 0 2 4 0
+	round 3 elapsed:	Duration { secs: 0, nanos: 6280442 }
+	> prefs + 1 0 2 0
+	round 4 elapsed:	Duration { secs: 0, nanos: 21216388 }
+
+What do we need to know to explain nodes `0` and `3` pairing up?
+
+	> query + 0 1 3 0
+	prefs_must:	((0, 0, 2, 1), 1)
+	prefs_must:	((1, 0, 2, 0), 1)
+	prefs_must:	((0, 1, 3, 0), 1)
+	round 5 elapsed:	Duration { secs: 0, nanos: 120708979 }
+
+These three preferences explain the output in that when the computation is run on them the corresponding output is produced. Notice that we can ignore `(0, 2, 4, 0)`, because that tuple played no role in producing the queried output. However, the explanation above is non-minimal in a few ways, both good and bad:
+
+1.	The example is non-minimal in that we could have just had `(0, 1, 3, 0)` as the only tuple. That would be pretty unilluminating, and we could "fix" this by insisting that `(0, 0, 2, 1)` be in the explanatory input. The explanation infrastructure permits the mandatory inclusion of any elements from the input, and it will sort out what further inputs you might need. 
+
+	Note: in monotonic computations this ability is not very helpful, because adding more inputs cannot remove an output. If I insist on some additional input elements, the computation still produces at least the records it produced before, so an additional element cannot invalidate an explanation. Explaining non-monotonic computations is one of the neat new aspects of this framework.
+
+2.	The example is also non-minimal in that we really don't need to know about `(0, 0, 2, 1)` at all. It is a possible pairing, but it is then removed. So, when looking back about what happened we might conclude that we don't need to know about it at all. That makes a lot of sense, and is something to aim at in the future. Right now the explanations are conservative, because it is easier for the implementors to understand, but they could likely be improved with better logic for identifying relevant differences. 
+
+As with connected components, you may specify a graph filename. In the absence of better information, nodes prefer each other based on their node identifier, so small identifier nodes are most popular. This is not what we did in the paper where preferences were chosen randomly, but it makes it harder to visually understand what is happening.
+
+Let's load up the graph and ask about the final matching for our trusty node `123456`, which happens to be to node `156689`:
+
+	Echidnatron% cargo run --release --example interactive-stable -- ~/Projects/Datasets/livejournal
+	     Running `target/release/examples/interactive-stable /Users/mcsherry/Projects/Datasets/livejournal`
+
+	initialization elapsed:	Duration { secs: 0, nanos: 376 }
+	query + 123456 156689 156689 123456
+	prefs_must:	((18854, (26944, 26944, 18854)), 1)
+	prefs_must:	((30824, (30851, 30851, 30824)), 1)
+	prefs_must:	((83623, (133128, 133128, 83623)), 1)
+	prefs_must:	((30824, (90896, 90896, 30824)), 1)
+	prefs_must:	((21350, (30851, 30851, 21350)), 1)
+	prefs_must:	((30820, (30870, 30870, 30820)), 1)
+	prefs_must:	((123456, (156689, 156689, 123456)), 1)
+	prefs_must:	((30693, (30870, 30870, 30693)), 1)
+	prefs_must:	((83623, (90896, 90896, 83623)), 1)
+	prefs_must:	((30824, (30870, 30870, 30824)), 1)
+	prefs_must:	((24181, (91222, 91222, 24181)), 1)
+	prefs_must:	((83623, (91222, 91222, 83623)), 1)
+	prefs_must:	((30824, (44426, 44426, 30824)), 1)
+	prefs_must:	((30820, (44426, 44426, 30820)), 1)
+	prefs_must:	((123456, (133128, 133128, 123456)), 1)
+	prefs_must:	((24181, (26944, 26944, 24181)), 1)
+	round 1 elapsed:	Duration { secs: 0, nanos: 48247995 }
+
+Ok, that is many graph edges. Not 68 million edges, which is the size of the graph, but certainly more than just one or two edges.
+
+Here is a more appealing way to visualize the results in this setting. Since there is a total order on preferences, we can just have the most appealing people go in order, matching with their first remaning choice. Reformatting the output above, we can just read out:
+
+	(18854, 26944) 		match!
+	(21350, 30851) 		match!
+	(24181, 26944) 		taken (by 18854)
+	(24181, 91222) 		match!
+	(30693, 30870) 		match!
+	(30820, 30870) 		taken (by 30693)
+	(30820, 44426)		match!
+	(30824, 30870)		taken (by 30693)
+	(30824, 30851)		taken (by 21350)
+	(30824, 44426)		taken (by 30820)
+	(30824, 90896)		match!
+	(83623, 90896)		taken (by 30824)
+	(83623, 91222)		taken (by 91222)
+	(83623, 133128)		match!
+	(123456, 133128)	taken (by 83623)
+	(123456, 156689)	match!
+
+So, that is an explanation for why `123456` and `156689` are now together, fit for daytime soaps. Imagine actually trying to keep all this in your head as you write query after query to sort out what caused this to happen.
 
 ## Todo
 

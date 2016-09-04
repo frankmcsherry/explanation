@@ -35,14 +35,16 @@ use differential_dataflow::lattice::Lattice;
 /// * Those elements currently reproduced using explanatory inputs.
 ///
 /// A `Variable` supports many of the same operations that a `Collection` supports, which perform additional work to
-/// maintain the explanation dataflow infrastructure.
-pub struct Variable<
-    'a,
+/// maintain the explanation dataflow infrastructure. Several methods are currently macros, because I haven't yet 
+/// sorted out how best to write their type signatures (e.g. `group` and `min` need to be generic over timestamps in
+/// an odd, probably HKT, sort of way).
+pub struct Variable<'a, G, K, V, Gp>
+where
     G: Scope, 
     K: Data+Default, 
     V: Data+Default, 
-    Gp: Scope<Timestamp=Product<Product<RootTimestamp, u32>, u32>>> 
-where G::Timestamp: Ord+Hash {
+    Gp: Scope<Timestamp=Product<Product<RootTimestamp, u32>, u32>>,
+    G::Timestamp: Ord+Hash {
     /// The collection itself.
     pub stream: Collection<G, (K, V)>,
     /// A collection of elements produced by explanatory inputs.
@@ -84,10 +86,6 @@ macro_rules! lift {
                     for &(ref datum, _weight) in data.iter() {
                         session.give(((datum.clone(), time.time()), 1));
                     }
-
-                    // for &(ref datum, weight) in data.iter() {
-                    //     session.give(((datum.clone(), time.time()), weight));
-                    // }
                 }
             })
         )
@@ -95,15 +93,15 @@ macro_rules! lift {
 }
 
 
-impl<'a,
-     G: Scope, 
-     K: Data+Default, 
-     V: Data+Default, 
-     Gp: Scope<Timestamp=Product<Product<RootTimestamp, u32>, u32>>> 
-Variable<'a, G, K, V, Gp> where G::Timestamp: Ord+Hash+Lattice {
+impl<'a, G, K, V, Gp> Variable<'a, G, K, V, Gp> where 
+    G: Scope, 
+    K: Data+Default, 
+    V: Data+Default, 
+    Gp: Scope<Timestamp=Product<Product<RootTimestamp, u32>, u32>>,
+    G::Timestamp: Ord+Hash+Lattice {
     /// Joins two collections using an unsigned key.
-    pub fn join_u<V2: Unsigned+Default+Data>(&mut self, other: &mut Variable<'a, G, K, V2, Gp>) -> Variable<'a, G, K, (V, V2), Gp> 
-        where K : Unsigned {
+    pub fn join_u<V2>(&mut self, other: &mut Variable<'a, G, K, V2, Gp>) -> Variable<'a, G, K, (V, V2), Gp> 
+        where K : Unsigned, V2: Unsigned+Default+Data {
 
         let result = Variable::new(
             self.stream.join_u(&other.stream).map(|(x,y,z)| (x,(y,z))),
@@ -119,10 +117,10 @@ Variable<'a, G, K, V, Gp> where G::Timestamp: Ord+Hash+Lattice {
     }
 
     /// Maps elements of one collection to another using an invertible function (and its inverse).
-    pub fn map<K2: Data+Default, 
+    pub fn map_inverse<K2: Data+Default, 
                V2: Data+Default, 
                F1: Fn((K,V))->(K2,V2)+'static, 
-               F2: Fn((K2,V2,G::Timestamp,u32))->(K,V,G::Timestamp,u32)+'static>(&mut self, logic: F1, inverse: F2) -> 
+               F2: Fn((K2,V2))->(K,V)+'static>(&mut self, logic: F1, inverse: F2) -> 
                Variable<'a, G, K2, V2, Gp>
            {
 
@@ -135,14 +133,16 @@ Variable<'a, G, K, V, Gp> where G::Timestamp: Ord+Hash+Lattice {
             &mut self.depends.scope()
         );
 
-        self.depends.add(&result.depends.stream.map(inverse));
+        self.depends.add(&result.depends.stream.map(move |(k2,v2,t,u)| {
+            let (k, v) = inverse((k2, v2));
+            (k, v, t, u)
+        }));
         result
 
     }
 
     /// Concatenates two collections.
     pub fn concat(&mut self, other: &mut Variable<'a, G, K, V, Gp>) -> Variable<'a, G, K, V, Gp> {
-
         let result = Variable::new(
             self.stream.concat(&other.stream), 
             self.working.concat(&other.working), 
@@ -152,20 +152,32 @@ Variable<'a, G, K, V, Gp> where G::Timestamp: Ord+Hash+Lattice {
         self.depends.add(&result.depends.stream);
         other.depends.add(&result.depends.stream);
         result
+    }
 
+
+    /// Concatenates two collections.
+    pub fn except(&mut self, other: &mut Variable<'a, G, K, V, Gp>) -> Variable<'a, G, K, V, Gp> {
+        let result = Variable::new(
+            self.stream.concat(&other.stream.negate()), 
+            self.working.concat(&other.working.negate()), 
+            &mut self.depends.scope()
+        );
+
+        self.depends.add(&result.depends.stream);
+        other.depends.add(&result.depends.stream);
+        result
     }
 
     /// Brings a collection from an outer scope into a child scope.
     pub fn enter<'b, T: Timestamp+Data>(&mut self, child: &Child<'b, G, T>) -> Variable<'a, Child<'b,G,T>, K, V, Gp> {
-
         let result = Variable::new( self.stream.enter(child), self.working.enter(child), &mut self.depends.scope() );
         self.depends.add(&result.depends.stream.map(|(x,y,t,q)| (x,y,t.outer,q)));
         result
-
     }
 
     /// Brings a collection from an outer scope into a child scope, each element at its own timestamp.
-    pub fn enter_at<'b, T: Timestamp+Data, F: Fn(&((K,V), Delta))->T+'static>(&mut self, child: &Child<'b,G, T>, at: F) -> Variable<'a, Child<'b,G,T>, K, V, Gp> {
+    pub fn enter_at<'b, T, F>(&mut self, child: &Child<'b,G, T>, at: F) -> Variable<'a, Child<'b,G,T>, K, V, Gp> 
+        where T: Timestamp+Data, F: Fn(&((K,V), Delta))->T+'static {
 
         let at = Rc::new(at);
         let clone1 = at.clone();
@@ -179,7 +191,17 @@ Variable<'a, G, K, V, Gp> where G::Timestamp: Ord+Hash+Lattice {
 
         self.depends.add(&result.depends.stream.map(|(x,y,t,q)| (x,y,t.outer,q)));
         result
+    }
 
+    pub fn consolidate(&mut self) -> Self {
+        let result = Variable::new(
+            self.stream.consolidate(), 
+            self.working.consolidate(), 
+            &mut self.depends.scope()
+        );
+
+        self.depends.add(&result.depends.stream);
+        result
     }
 }
 
@@ -191,9 +213,6 @@ macro_rules! min {
         let min1 = $var.stream.group_u(|_k, s, t| t.push(((*s.next().unwrap().0), 1)));
         let min2 = $var.working.group_u(|_k, s, t| t.push(((*s.next().unwrap().0), 1)));
 
-        // let min1 = min1.inspect(|x| println!("min1: {:?}", x));
-        // let min2 = min2.inspect(|x| println!("min2: {:?}", x));
-
         // construct a new variable from these minimums.
         let var_min = Variable::new(
             min1.map(|(k,v)| (k,$logic(v))),
@@ -202,25 +221,60 @@ macro_rules! min {
         );
 
         // extract minimums and presents them as explainable data, in the explanation scope.
-        let temp = lift!(min1.concat(&min2)).leave().enter(&$scope).map(|((x,(l,y)),t)| (x,((l,y),t)));
-        // let temp = lift!($var.stream.concat(&$var.working)).leave().enter(&$scope).map(|((x,(l,y)),t)| (x,((l,y),t)));
+        let temp = lift!(min1.concat(&min2)).leave().enter(&$scope).map(|((x,val),t)| (x,(val,t)));
 
         // set explanation requirements from requests by
         //  (i)     joining requests against actual minimums, 
         //  (ii)    filtering records to only those with less or equal time,
         //  (iii)   filtering records to only those with less or equal value,
         $var.depends.add(
-            &temp.join_u(&var_min.depends.stream.map(|(x,l,t,q)| (x,(l,t,q)))
-                                                // .inspect_batch(|t,xs| println!("min_req: {:?} @ {:?}", xs, t))
-                                                )  // (i)
+            &temp.join_u(&var_min.depends.stream.map(|(x,l,t,q)| (x,(l,t,q))))  // (i)
                  .filter(|&(_,(_,t1),(_,t2,_))| t1 <= t2)                       // (ii)
-                 .filter(|&(_,((l1,_),_),(l2,_,_))| l1 <= l2)                   // (iii)
-                 .map(|(x,((l,y),t),(_,_,q))| (x,(l,y),t,q))                    // reformatting
+                 .filter(|&(_,(val,_),(l2,_,_))| $logic(val) <= l2)             // (iii)
+                 .map(|(x,(val,t),(_,_,q))| (x,val,t,q))                        // reformatting
         );
 
         var_min
     }}
 }
+
+#[macro_export]
+macro_rules! except {
+    ($var1:expr, $var2:expr, $scope:expr) => {{
+
+        // let result = Variable::new(
+        //     $var1.stream.concat(&$var2.stream.negate()), 
+        //     $var1.working.concat(&$var2.working.negate()), 
+        //     &mut $scope
+        // );
+        // $var1.depends.add(
+        //     &result.depends.stream
+        //         .map(|(x,y,t,q)| ((x,y),(t,q)))
+        //         .join(&lift!($var1.stream.concat(&$var1.working)).leave().enter(&$scope))
+        //         .filter(|&(_,(t1,_),t2)| t1 >= t2)
+        //         .map(|((x,y),(_,q),t)| (x,y,t,q))
+        // );
+        // $var2.depends.add(
+        //     &result.depends.stream
+        //         .map(|(x,y,t,q)| ((x,y),(t,q)))
+        //         .join(&lift!($var2.stream.concat(&$var2.working)).leave().enter(&$scope))
+        //         .filter(|&(_,(t1,_),t2)| t1 >= t2)
+        //         .map(|((x,y),(_,q),t)| (x,y,t,q))
+        // );
+
+        let result = Variable::new(
+            $var1.stream.concat(&$var2.stream.negate()), 
+            $var1.working.concat(&$var2.working.negate()), 
+            &mut $scope
+        );
+
+        $var1.depends.add(&result.depends.stream);
+        $var2.depends.add(&result.depends.stream);
+
+        result
+    }}
+}
+
 
 #[macro_export]
 macro_rules! leave {
@@ -229,9 +283,7 @@ macro_rules! leave {
         $var.depends.add(
             &result.depends.stream
                 .map(|(x,y,t,q)| ((x,y),(t,q)))
-                // .inspect_batch(|t,xs| println!("leave1: {:?} @ {:?}", xs, t))
                 .join(&lift!($var.stream.concat(&$var.working)).leave().enter(&$scope))
-                // .inspect_batch(|t,xs| println!("leave2: {:?} @ {:?}", xs, t))
                 .map(|((x,y),(_,q),t)| (x,y,t,q))
         );
         result
