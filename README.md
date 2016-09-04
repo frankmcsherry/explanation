@@ -4,7 +4,13 @@ Infrastructure for explaining the outputs of differential dataflow computations
 
 ## Explaining the outputs of data-parallel computations
 
-This project demonstrates how one can use differential dataflow to explain the outputs of differential dataflow computations, as described in the paper [Explaining outputs in modern data analytics](). 
+This project demonstrates how one can use differential dataflow to explain the outputs of differential dataflow computations, as described in the paper [Explaining outputs in modern data analytics](http://www.vldb.org/pvldb/vol9/p1137-chothia.pdf). There is also an earlier [blog post](https://github.com/frankmcsherry/blog/blob/master/posts/2016-03-27.md) discussing the material, and trying to explain how it works.
+
+In our context, programs run on input collections and produce output collections. An "explanation" for a subset of the output is a subset of the input so that if you ran the computation, it would produce at least the output subset you asked for. 
+
+Concise explanations of this form can be super helpful, both for debugging your program and for understanding / communicating why parts of the output are the way they are. 
+
+## A quick taste
 
 To give a taste, we can explain the outputs of "prioritized label propagation", an algorithm for determining connected components in a graph, by tracking down which graph edges and labels were important to arrive at each of the individual output records, even as the graph changes. Here we load the `livejournal` graph dataset, asks for an explanation of node `123456`'s label, and then removes one of the edges on the explanatory path, causing the explanation to change:
 
@@ -146,11 +152,7 @@ For a more exotic and technically challenging example, we also have an implement
 
 This is an iterative computation, in the same spirit as prioritized label propagation for connected components. We can run this program in differential dataflow, and it will update as the preferences change.
 
-Here is a very simple example, in which node `0` fancies node `2`, but the feeling is not reciprocated (nodes `1` and `2` make off together). Node `0` also likes `3` some (though not as much) and node `4` somewhat less. The format for each input is
-
-	node1_id node1_pref node2_id node2_pref
-
-which we can just go and run
+We can run this example with explanations as well:
 
 	Echidnatron% cargo run --example interactive-stable
 	     Running `target/debug/examples/interactive-stable`
@@ -165,7 +167,7 @@ which we can just go and run
 	> prefs + 1 0 2 0
 	round 4 elapsed:	Duration { secs: 0, nanos: 21216388 }
 
-What do we need to know to explain nodes `0` and `3` pairing up?
+These preferences have the form `(id1, pref1, id2, pref2)` so we've described `0` and three nodes it might like to meet (`2`, then `3`, then `4`). Also, apparently nodes `1` and `2` have a thing for each other, and are probably going to hook up. Indeed, `0` and `3` get matched, and we might want to know why:
 
 	> query + 0 1 3 0
 	prefs_must:	((0, 0, 2, 1), 1)
@@ -173,7 +175,7 @@ What do we need to know to explain nodes `0` and `3` pairing up?
 	prefs_must:	((0, 1, 3, 0), 1)
 	round 5 elapsed:	Duration { secs: 0, nanos: 120708979 }
 
-These three preferences explain the output in that when the computation is run on them the corresponding output is produced. Notice that we can ignore `(0, 2, 4, 0)`, because that tuple played no role in producing the queried output. However, the explanation above is non-minimal in a few ways, both good and bad:
+These three preferences explain the output in that when the computation is run on them the corresponding output is produced. The tuple `(0, 2, 4, 0)` is not needed, because that tuple played no role in producing the queried output. However, the explanation above is non-minimal in a few ways, both good and bad:
 
 1.	The example is non-minimal in that we could have just had `(0, 1, 3, 0)` as the only tuple. That would be pretty unilluminating, and we could "fix" this by insisting that `(0, 0, 2, 1)` be in the explanatory input. The explanation infrastructure permits the mandatory inclusion of any elements from the input, and it will sort out what further inputs you might need. 
 
@@ -229,7 +231,7 @@ Here is a more appealing way to visualize the results in this setting. Since the
 	(123456, 133128)	taken (by 83623)
 	(123456, 156689)	match!
 
-So, that is an explanation for why `123456` and `156689` are now together, fit for daytime soaps. Imagine actually trying to keep all this in your head as you write query after query to sort out what caused this to happen.
+So, that is an explanation for why `123456` and `156689` are now together, fit for daytime soaps. Imagine actually trying to keep all this in your head as you write query after query to sort out what caused this to happen. 
 
 ## Todo
 
